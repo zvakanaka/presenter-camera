@@ -1,0 +1,1115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PiP Webcam</title>
+  <style>
+    :root {
+      --bg: #f5f5f4;
+      --fg: #1c1917;
+      --muted: #78716c;
+      --card: #ffffff;
+      --border: #e7e5e4;
+      --accent: #2563eb;
+      --accent-fg: #ffffff;
+      --seg-bg: #f5f5f4;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0c0a09;
+        --fg: #f5f5f4;
+        --muted: #a8a29e;
+        --card: #1c1917;
+        --border: #292524;
+        --accent: #3b82f6;
+        --seg-bg: #0c0a09;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--fg);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+    main {
+      width: 100%;
+      max-width: 760px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.sub { margin: 0 0 16px; color: var(--muted); }
+    .stage {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      display: grid;
+      place-items: center;
+    }
+    .stage.dragover { outline: 3px dashed var(--accent); outline-offset: -3px; }
+    #output {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    /* The raw camera feed is only a source for the canvas; keep it rendering but invisible. */
+    #video {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .placeholder {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: #a8a29e;
+      text-align: center;
+      padding: 16px;
+      background: #000;
+    }
+    .placeholder[hidden] { display: none; }
+    .controls, .bg-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-top: 16px;
+    }
+    .bg-controls {
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+    .bg-controls .label { font-weight: 600; margin-right: 4px; }
+    button, select {
+      font: inherit;
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--fg);
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-fg);
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    select { flex: 1 1 200px; min-width: 0; }
+    label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+    .segmented {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--seg-bg);
+    }
+    .segmented input { position: absolute; opacity: 0; pointer-events: none; }
+    .segmented label {
+      padding: 7px 14px;
+      border-right: 1px solid var(--border);
+    }
+    .segmented label:last-child { border-right: 0; }
+    .segmented input:checked + span { color: var(--accent); font-weight: 600; }
+    .segmented label:has(input:checked) { background: var(--card); }
+    .segmented label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; width: 100%; }
+    .row[hidden] { display: none; }
+    input[type=range] { width: 140px; }
+    #thumb {
+      width: 64px;
+      height: 36px;
+      object-fit: cover;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    #thumb[hidden] { display: none; }
+    .countdown {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 16px;
+      color: #fff;
+      font-size: clamp(20px, 5vw, 40px);
+      font-weight: 600;
+      background: rgba(0, 0, 0, 0.45);
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+    }
+    .countdown[hidden] { display: none; }
+    .hint { color: var(--muted); font-size: 13px; }
+    [data-tip] { cursor: help; }
+    button[data-tip], label[data-tip]:has(input[type=checkbox], input[type=radio]) { cursor: pointer; }
+    #tooltip {
+      position: fixed;
+      z-index: 1000;
+      max-width: min(300px, calc(100vw - 32px));
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: #1c1917;
+      color: #f5f5f4;
+      border: 1px solid #44403c;
+      font-size: 13px;
+      line-height: 1.4;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s;
+    }
+    #tooltip.show { opacity: 1; }
+    #status { margin: 12px 0 0; color: var(--muted); font-size: 13px; min-height: 1.5em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>PiP Webcam</h1>
+    <p class="sub">Show your webcam in a floating picture-in-picture window, with optional background blur or replacement.</p>
+
+    <div class="stage" id="stage">
+      <canvas id="output"></canvas>
+      <video id="video" autoplay playsinline muted></video>
+      <div class="countdown" id="countdown" hidden></div>
+      <div class="placeholder" id="placeholder">Camera is off. Click Start camera.</div>
+    </div>
+
+    <div class="controls">
+      <button id="startBtn" class="primary" data-tip="Turn on your webcam. The browser asks for permission the first time. If the camera was on when you last left the page, it turns back on automatically.">Start camera</button>
+      <button id="pipBtn" disabled data-tip="Float the video in a small always-on-top window you can drag anywhere and resize, even over other apps. Click again (&quot;Bring back&quot;) to return it to this page.">Pop out (PiP)</button>
+      <button id="stopBtn" disabled data-tip="Turn the webcam off and close the floating window. The camera light should go out.">Stop</button>
+      <select id="cameraSelect" disabled data-tip="Which camera to use. Only enabled when more than one is connected. Your choice is remembered."><option>No cameras yet</option></select>
+      <label data-tip="Flip the picture left-to-right so it behaves like a mirror, which feels natural when you look at yourself. Turn off to see what others would see unflipped. Background images are never flipped."><input type="checkbox" id="mirrorChk" checked> Mirror</label>
+    </div>
+
+    <div class="bg-controls">
+      <div class="row">
+        <span class="label">Background</span>
+        <div class="segmented" role="radiogroup" aria-label="Background mode">
+          <label data-tip="Show the camera as-is, with no background processing. Uses the least CPU/GPU."><input type="radio" name="mode" value="none" checked><span>None</span></label>
+          <label data-tip="Keep your real surroundings but blur them, so you stay sharp and the background is out of focus."><input type="radio" name="mode" value="blur"><span>Blur</span></label>
+          <label data-tip="Replace everything behind you with a picture of your choice. The image is saved in this browser and comes back after a refresh."><input type="radio" name="mode" value="image"><span>Image</span></label>
+        </div>
+      </div>
+      <div class="row" id="blurRow" hidden>
+        <label data-tip="How blurry the background is. Low keeps the room recognisable; high turns it into soft colour.">Blur strength <input type="range" id="blurRange" min="4" max="40" value="16"></label>
+      </div>
+      <div class="row" id="imageRow" hidden>
+        <img id="thumb" alt="Current background" hidden>
+        <button id="chooseBtn" data-tip="Pick an image file to put behind you. You can also drag an image straight onto the video. It is stretched to cover the frame, cropping the edges if the shape differs.">Choose image…</button>
+        <button id="removeBtn" disabled data-tip="Delete the saved background image from this browser.">Remove</button>
+        <input type="file" id="fileInput" accept="image/*" hidden>
+        <span style="color: var(--muted); font-size: 13px">or drop an image onto the video</span>
+      </div>
+      <div class="row" id="edgeRow" hidden>
+        <label data-tip="How strictly the outline hugs you. Raise it if bits of the room show around your head and shoulders; lower it if your hair, ears or headphones get cut off.">Tightness <input type="range" id="tightRange" min="0" max="100" value="60"></label>
+        <label data-tip="How much the outline is steadied over time. Raise it if edges flicker or shimmer; lower it if the outline lags behind when you move quickly.">Smoothing <input type="range" id="smoothRange" min="0" max="90" value="60"></label>
+        <label data-tip="Feathers the border between you and the background. 0 is a hard cut-out edge; higher values blend you in more gently but can let a thin fringe of background through.">Edge softness <input type="range" id="edgeRange" min="0" max="8" value="2"></label>
+        <label data-tip="Which AI model finds you in the picture. Accurate gives cleaner edges around hair, shoulders and clothes. Fast uses less processing power; try it if the video is choppy. All processing stays on your computer.">Model
+          <select id="modelSelect" style="flex: none">
+            <option value="accurate">Accurate</option>
+            <option value="fast">Fast</option>
+          </select>
+        </label>
+      </div>
+      <div class="row" id="plateRow" hidden>
+        <button id="captureBtn" data-tip="Take a snapshot of the empty room: after a 5-second countdown, step fully out of frame. Comparing each frame with it helps separate you from the background, especially where colours are similar. Saved in this browser. Recapture if the camera moves or the lighting changes.">Capture background</button>
+        <button id="clearPlateBtn" disabled data-tip="Forget the captured empty background and go back to using the AI model alone.">Clear</button>
+        <label data-tip="How much the captured background overrides the AI model near your outline. 0 ignores the capture; 100 trusts it fully. Parts the model is sure are you are never removed.">Match strength <input type="range" id="plateStrength" min="0" max="100" value="60"></label>
+        <label data-tip="How different a pixel must look from the captured background to count as you. Raise it if dark headphones or hair blending into a dark wall drop out; lower it if background still shows around you.">Sensitivity <input type="range" id="plateSens" min="0" max="100" value="50"></label>
+        <span class="hint" id="plateInfo">No background captured. Step out of frame and capture one for cleaner edges.</span>
+      </div>
+      <div class="row" style="justify-content: flex-end">
+        <button id="resetBtn" data-tip="Put Mirror, Blur strength, Tightness, Smoothing, Edge softness, Model, Match strength and Sensitivity back to their starting values. Your background mode, background image and captured empty background are kept.">Reset to defaults</button>
+      </div>
+    </div>
+
+    <p id="status"></p>
+  </main>
+  <div id="tooltip" role="tooltip" hidden></div>
+
+  <script>
+    // Tooltips: hover or keyboard-focus any control with data-tip. Positioned above the
+    // control (below if there's no room), kept inside the window.
+    (() => {
+      const tip = document.getElementById('tooltip');
+      let current = null, showTimer = 0;
+
+      // Expose the text to screen readers too.
+      document.querySelectorAll('[data-tip]').forEach(el => {
+        const target = el.matches('label') ? el.querySelector('input, select') || el : el;
+        target.setAttribute('aria-description', el.dataset.tip);
+      });
+
+      function place(el) {
+        tip.textContent = el.dataset.tip;
+        tip.hidden = false;
+        const r = el.getBoundingClientRect();
+        const t = tip.getBoundingClientRect();
+        const gap = 8, margin = 16;
+        let top = r.top - t.height - gap;
+        if (top < margin) top = r.bottom + gap;
+        let left = r.left + r.width / 2 - t.width / 2;
+        left = Math.max(margin, Math.min(left, window.innerWidth - t.width - margin));
+        tip.style.top = `${top}px`;
+        tip.style.left = `${left}px`;
+        tip.classList.add('show');
+      }
+
+      function show(el, delay) {
+        clearTimeout(showTimer);
+        current = el;
+        showTimer = setTimeout(() => current === el && place(el), delay);
+      }
+
+      function hide() {
+        clearTimeout(showTimer);
+        current = null;
+        tip.classList.remove('show');
+        tip.hidden = true;
+      }
+
+      document.addEventListener('pointerover', e => {
+        const el = e.target.closest('[data-tip]');
+        if (el && el !== current) show(el, 350);
+        else if (!el && current) hide();
+      });
+      document.addEventListener('focusin', e => {
+        const el = e.target.closest('[data-tip]');
+        if (el && e.target.matches(':focus-visible')) show(el, 0);
+      });
+      document.addEventListener('focusout', hide);
+      document.addEventListener('pointerdown', hide);
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') hide(); });
+      window.addEventListener('scroll', hide, true);
+      window.addEventListener('resize', hide);
+    })();
+  </script>
+
+  <script type="module">
+    const MP_VERSION = '0.10.14';
+    const MP_BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
+    const MODELS = {
+      // Multiclass model: mask 0 is "background", so person = 1 - mask0. Cleaner edges.
+      accurate: {
+        url: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite',
+        personFrom: masks => ({ data: masks[0].getAsFloat32Array(), invert: true, w: masks[0].width, h: masks[0].height }),
+      },
+      // Single-mask model: the one mask is "person" probability. Lighter, rougher edges.
+      fast: {
+        url: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
+        personFrom: masks => ({ data: masks[0].getAsFloat32Array(), invert: false, w: masks[0].width, h: masks[0].height }),
+      },
+    };
+    // Frames are shrunk to this width before segmentation (the models work at 256px
+    // internally anyway); this keeps per-frame GPU readback and pixel loops cheap.
+    const SEG_WIDTH = 384;
+
+    const $ = id => document.getElementById(id);
+    const video = $('video');
+    const canvas = $('output');
+    const ctx = canvas.getContext('2d');
+    const stage = $('stage');
+    const placeholder = $('placeholder');
+    const startBtn = $('startBtn');
+    const pipBtn = $('pipBtn');
+    const stopBtn = $('stopBtn');
+    const cameraSelect = $('cameraSelect');
+    const mirrorChk = $('mirrorChk');
+    const blurRange = $('blurRange');
+    const edgeRange = $('edgeRange');
+    const tightRange = $('tightRange');
+    const smoothRange = $('smoothRange');
+    const modelSelect = $('modelSelect');
+    const captureBtn = $('captureBtn');
+    const clearPlateBtn = $('clearPlateBtn');
+    const plateStrength = $('plateStrength');
+    const plateSens = $('plateSens');
+    const plateInfo = $('plateInfo');
+    const countdownEl = $('countdown');
+    const chooseBtn = $('chooseBtn');
+    const removeBtn = $('removeBtn');
+    const fileInput = $('fileInput');
+    const thumb = $('thumb');
+    const statusEl = $('status');
+
+    const maskCanvas = document.createElement('canvas');
+    const maskCtx = maskCanvas.getContext('2d');
+    let maskImageData = null;
+    let haveMask = false;
+    let smoothed = null;          // Float32Array: person probability, averaged over frames
+    const segInput = document.createElement('canvas');
+    const segInputCtx = segInput.getContext('2d', { willReadFrequently: true });
+
+    // Captured empty background ("clean plate"), at segmentation resolution, RGB floats.
+    let plate = null;             // { w, h, data: Float32Array }
+    let capture = null;           // in-progress capture: { acc, frames, needed, w, h, resolve }
+    let gain = 1;                 // brightness correction for camera auto-exposure drift
+    let plateMismatchWarned = false;
+
+    let stream = null;
+    let docPipWindow = null;
+    let pipVideo = null;          // used only by the classic video-PiP fallback
+    let segmenter = null;
+    let segmenterLoading = null;
+    let bgImage = null;           // ImageBitmap
+    let thumbUrl = null;
+    let loopToken = 0;
+    let lastTs = 0;
+    let lastVideoTime = -1;
+
+    const hasDocPip = 'documentPictureInPicture' in window;
+    const hasVideoPip = 'pictureInPictureEnabled' in document && document.pictureInPictureEnabled;
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+
+    // ---------- Settings (localStorage; per-browser convenience) ----------
+    const settings = {
+      get(key, fallback) {
+        try { const v = localStorage.getItem('pipwebcam.' + key); return v === null ? fallback : JSON.parse(v); }
+        catch { return fallback; }
+      },
+      set(key, value) {
+        try { localStorage.setItem('pipwebcam.' + key, JSON.stringify(value)); } catch {}
+      },
+    };
+
+    // ---------- Background image (IndexedDB; survives refresh) ----------
+    function openDb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open('pip-webcam', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('kv');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function dbOp(mode, fn) {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('kv', mode);
+        const req = fn(tx.objectStore('kv'));
+        tx.oncomplete = () => { db.close(); resolve(req?.result); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+      });
+    }
+    const dbGet = key => dbOp('readonly', s => s.get(key));
+    const dbSet = (key, val) => dbOp('readwrite', s => s.put(val, key));
+    const dbDel = key => dbOp('readwrite', s => s.delete(key));
+
+    async function applyBackgroundBlob(blob) {
+      bgImage?.close?.();
+      bgImage = blob ? await createImageBitmap(blob) : null;
+      if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+      thumbUrl = blob ? URL.createObjectURL(blob) : null;
+      thumb.src = thumbUrl || '';
+      thumb.hidden = !blob;
+      removeBtn.disabled = !blob;
+    }
+
+    async function setBackgroundFile(file) {
+      if (!file || !file.type.startsWith('image/')) {
+        setStatus('That file is not an image.');
+        return;
+      }
+      try {
+        await applyBackgroundBlob(file);
+      } catch (err) {
+        setStatus(`Could not load that image: ${err.message}`);
+        return;
+      }
+      try {
+        // Store as a plain Blob so it is structured-cloneable everywhere.
+        await dbSet('background', new Blob([file], { type: file.type }));
+      } catch (err) {
+        setStatus(`Image loaded, but could not be saved for next time: ${err.message}`);
+      }
+      setMode('image');
+    }
+
+    chooseBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      setBackgroundFile(fileInput.files[0]);
+      fileInput.value = '';
+    });
+    removeBtn.addEventListener('click', async () => {
+      await applyBackgroundBlob(null);
+      try { await dbDel('background'); } catch {}
+      setStatus('Background image removed.');
+    });
+
+    stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('dragover'); });
+    stage.addEventListener('dragleave', () => stage.classList.remove('dragover'));
+    stage.addEventListener('drop', e => {
+      e.preventDefault();
+      stage.classList.remove('dragover');
+      setBackgroundFile(e.dataTransfer.files[0]);
+    });
+
+    // ---------- Background mode ----------
+    function getMode() { return document.querySelector('input[name=mode]:checked').value; }
+
+    function setMode(mode) {
+      document.querySelector(`input[name=mode][value=${mode}]`).checked = true;
+      onModeChange();
+    }
+
+    function onModeChange() {
+      const mode = getMode();
+      settings.set('mode', mode);
+      $('blurRow').hidden = mode !== 'blur';
+      $('imageRow').hidden = mode !== 'image';
+      $('edgeRow').hidden = mode === 'none';
+      $('plateRow').hidden = mode === 'none';
+      haveMask = false;
+      if (mode !== 'none') ensureSegmenter();
+      if (mode === 'image' && !bgImage) setStatus('Choose a background image, or drop one onto the video.');
+    }
+    document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', onModeChange));
+
+    blurRange.addEventListener('input', () => settings.set('blur', +blurRange.value));
+    edgeRange.addEventListener('input', () => settings.set('edge', +edgeRange.value));
+    tightRange.addEventListener('input', () => settings.set('tight', +tightRange.value));
+    smoothRange.addEventListener('input', () => settings.set('smooth', +smoothRange.value));
+    plateStrength.addEventListener('input', () => settings.set('plateStrength', +plateStrength.value));
+    plateSens.addEventListener('input', () => settings.set('plateSens', +plateSens.value));
+
+    // ---------- Background capture (clean plate) ----------
+    function setPlate(p) {
+      plate = p;
+      gain = 1;
+      plateMismatchWarned = false;
+      clearPlateBtn.disabled = !p;
+      plateInfo.textContent = p
+        ? 'Background captured. Recapture if the lighting or camera position changes.'
+        : 'No background captured. Step out of frame and capture one for cleaner edges.';
+    }
+
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    async function captureBackground() {
+      if (!stream) { setStatus('Start the camera first.'); return; }
+      captureBtn.disabled = true;
+      try {
+        for (let s = 5; s > 0; s--) {
+          countdownEl.textContent = `Step out of frame… ${s}`;
+          countdownEl.hidden = false;
+          setStatus(`Step out of frame. Capturing the empty background in ${s}…`);
+          await sleep(1000);
+          if (!stream) return;
+        }
+        countdownEl.textContent = 'Capturing… stay out of frame';
+        setStatus('Capturing the empty background…');
+        // Average ~20 frames to remove camera noise. The render loop fills this in.
+        const ok = await new Promise(resolve => { capture = { acc: null, frames: 0, needed: 20, resolve }; });
+        if (!ok) return;
+        try {
+          await dbSet('plate', plate);
+          setStatus('Background captured. You can step back in.');
+        } catch (err) {
+          setStatus(`Background captured, but could not be saved for next time: ${err.message}`);
+        }
+      } finally {
+        countdownEl.hidden = true;
+        captureBtn.disabled = false;
+      }
+    }
+
+    function accumulateCapture() {
+      const { width: w, height: h } = segInput;
+      const img = segInputCtx.getImageData(0, 0, w, h).data;
+      if (!capture.acc || capture.w !== w || capture.h !== h) {
+        capture.acc = new Float32Array(w * h * 3);
+        capture.frames = 0;
+        capture.w = w;
+        capture.h = h;
+      }
+      const acc = capture.acc;
+      for (let i = 0, j = 0; j < img.length; i += 3, j += 4) {
+        acc[i] += img[j];
+        acc[i + 1] += img[j + 1];
+        acc[i + 2] += img[j + 2];
+      }
+      if (++capture.frames >= capture.needed) {
+        const inv = 1 / capture.frames;
+        for (let i = 0; i < acc.length; i++) acc[i] *= inv;
+        setPlate({ w, h, data: acc });
+        const done = capture.resolve;
+        capture = null;
+        done(true);
+      }
+    }
+
+    captureBtn.addEventListener('click', captureBackground);
+    clearPlateBtn.addEventListener('click', async () => {
+      setPlate(null);
+      try { await dbDel('plate'); } catch {}
+      setStatus('Captured background cleared.');
+    });
+    modelSelect.addEventListener('change', () => {
+      settings.set('model', modelSelect.value);
+      segmenter?.close();
+      segmenter = null;
+      segmenterLoading = null;
+      haveMask = false;
+      smoothed = null;
+      if (getMode() !== 'none') ensureSegmenter();
+    });
+    mirrorChk.addEventListener('change', () => settings.set('mirror', mirrorChk.checked));
+
+    // ---------- Segmentation model ----------
+    function ensureSegmenter() {
+      if (segmenter || segmenterLoading) return segmenterLoading;
+      setStatus('Loading background segmentation model…');
+      const modelKey = modelSelect.value;
+      segmenterLoading = (async () => {
+        try {
+          const { FilesetResolver, ImageSegmenter } = await import(`${MP_BASE}/vision_bundle.mjs`);
+          const fileset = await FilesetResolver.forVisionTasks(`${MP_BASE}/wasm`);
+          const opts = delegate => ({
+            baseOptions: { modelAssetPath: MODELS[modelKey].url, delegate },
+            runningMode: 'VIDEO',
+            outputCategoryMask: false,
+            outputConfidenceMasks: true,
+          });
+          try {
+            segmenter = await ImageSegmenter.createFromOptions(fileset, opts('GPU'));
+          } catch {
+            segmenter = await ImageSegmenter.createFromOptions(fileset, opts('CPU'));
+          }
+          setStatus(stream ? 'Background effects ready.' : 'Background effects ready. Start the camera to see them.');
+        } catch (err) {
+          segmenterLoading = null;
+          setStatus(`Could not load the segmentation model (are you online?): ${err.message}`);
+        }
+      })();
+      return segmenterLoading;
+    }
+
+    let lastRaw = null, spatialTmp = null, spatialOut = null;
+
+    // Separable box blur of radius r on a w×h float array (src → dst, tmp is scratch).
+    function boxBlur(src, dst, tmp, w, h, r) {
+      const norm = 1 / (2 * r + 1);
+      for (let y = 0; y < h; y++) {
+        const row = y * w;
+        let acc = 0;
+        for (let x = -r; x <= r; x++) acc += src[row + Math.min(w - 1, Math.max(0, x))];
+        for (let x = 0; x < w; x++) {
+          tmp[row + x] = acc * norm;
+          acc += src[row + Math.min(w - 1, x + r + 1)] - src[row + Math.max(0, x - r)];
+        }
+      }
+      for (let x = 0; x < w; x++) {
+        let acc = 0;
+        for (let y = -r; y <= r; y++) acc += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+        for (let y = 0; y < h; y++) {
+          dst[y * w + x] = acc * norm;
+          acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+        }
+      }
+    }
+
+    // Downscale the current frame (unmirrored) into segInput: much less data to push
+    // through the model and back, and the resolution the captured background is kept at.
+    function grabSegFrame() {
+      const sw = SEG_WIDTH;
+      const sh = Math.round(SEG_WIDTH * video.videoHeight / video.videoWidth);
+      if (segInput.width !== sw || segInput.height !== sh) { segInput.width = sw; segInput.height = sh; }
+      segInputCtx.drawImage(video, 0, 0, sw, sh);
+    }
+
+    let rawP = null, nearP = null, nearTmp = null;
+
+    // Blend the model's guess with "does this pixel differ from the empty background?".
+    // Only applied close to you, so things changing elsewhere in the room are ignored.
+    function fuseWithPlate(p, w, h, frame) {
+      const sw = segInput.width, sh = segInput.height;
+      const pd = plate.data;
+      const n = w * h;
+
+      // Camera auto-exposure drifts; match brightness using pixels the model is sure
+      // are background.
+      let sumCur = 0, sumPlate = 0;
+      for (let y = 0; y < h; y += 2) {
+        const sy = ((y * sh / h) | 0) * sw;
+        for (let x = 0; x < w; x += 2) {
+          const i = y * w + x;
+          if (p[i] > 0.05) continue;
+          const si = sy + ((x * sw / w) | 0);
+          sumCur += frame[si * 4] + frame[si * 4 + 1] + frame[si * 4 + 2];
+          sumPlate += pd[si * 3] + pd[si * 3 + 1] + pd[si * 3 + 2];
+        }
+      }
+      if (sumPlate > 0 && sumCur > 0) {
+        const target = Math.min(2, Math.max(0.5, sumCur / sumPlate));
+        gain += (target - gain) * 0.1;
+      }
+
+      // "Near you": the model's mask spread out by ~8px (of 384).
+      boxBlur(p, nearP, nearTmp, w, h, 8);
+
+      const strength = +plateStrength.value / 100;
+      const sens = +plateSens.value / 100;
+      const dLo = 0.02 + (1 - sens) * 0.08;   // colour distance below this = background
+      const dHi = dLo + 0.08;                  // above this = something that isn't the background
+      const norm = 1 / (255 * Math.sqrt(3));
+
+      for (let y = 0; y < h; y++) {
+        const sy = ((y * sh / h) | 0) * sw;
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          const near = Math.min(1, nearP[i] * 8);
+          if (near <= 0) continue;
+          const si = sy + ((x * sw / w) | 0);
+          const dr = frame[si * 4] - pd[si * 3] * gain;
+          const dg = frame[si * 4 + 1] - pd[si * 3 + 1] * gain;
+          const db = frame[si * 4 + 2] - pd[si * 3 + 2] * gain;
+          const dist = Math.sqrt(dr * dr + dg * dg + db * db) * norm;
+          let q = (dist - dLo) / (dHi - dLo);
+          q = q < 0 ? 0 : q > 1 ? 1 : q;
+          q = q * q * (3 - 2 * q);
+          // Never let a colour match erase parts the model is confident are you (e.g. a
+          // shirt the same colour as the wall); only uncertain pixels get pulled down.
+          let k = strength * near;
+          if (q < p[i]) {
+            const certain = (p[i] - 0.6) / 0.3;
+            k *= certain <= 0 ? 1 : certain >= 1 ? 0 : 1 - certain;
+          }
+          p[i] += k * (q - p[i]);
+        }
+      }
+    }
+
+    function segment(now) {
+      const ts = Math.max(now, lastTs + 1);  // MediaPipe needs strictly increasing timestamps
+      lastTs = ts;
+
+      let frame = null;
+      if (plate) {
+        // Only usable if captured at the same resolution/aspect as the current camera.
+        if (plate.w === segInput.width && plate.h === segInput.height) {
+          frame = segInputCtx.getImageData(0, 0, segInput.width, segInput.height).data;
+        } else if (!plateMismatchWarned) {
+          plateMismatchWarned = true;
+          setStatus('The captured background is from a different camera or resolution. Capture it again.');
+        }
+      }
+
+      const model = MODELS[modelSelect.value];
+      segmenter.segmentForVideo(segInput, ts, result => {
+        const masks = result.confidenceMasks;
+        if (!masks?.length) return;
+        const { data: modelData, invert, w, h } = model.personFrom(masks);
+        const n = w * h;
+
+        // Person probability for this frame, optionally refined by the captured background.
+        if (!rawP || rawP.length !== n) {
+          rawP = new Float32Array(n);
+          nearP = new Float32Array(n);
+          nearTmp = new Float32Array(n);
+        }
+        for (let i = 0; i < n; i++) rawP[i] = invert ? 1 - modelData[i] : modelData[i];
+        if (frame) fuseWithPlate(rawP, w, h, frame);
+        const data = rawP;
+
+        if (maskCanvas.width !== w || maskCanvas.height !== h || !maskImageData) {
+          maskCanvas.width = w;
+          maskCanvas.height = h;
+          maskImageData = maskCtx.createImageData(w, h);
+          smoothed = null;
+        }
+        if (!smoothed || smoothed.length !== n) {
+          smoothed = new Float32Array(n);
+          lastRaw = new Float32Array(n);
+          spatialTmp = new Float32Array(n);
+          spatialOut = new Float32Array(n);
+          for (let i = 0; i < n; i++) smoothed[i] = lastRaw[i] = data[i];
+        }
+
+        // Temporal smoothing. The model flip-flops on ambiguous areas (dark hair or
+        // headphones on a dark background, objects right behind you). A big change is
+        // only followed quickly once two frames in a row agree, which is what real
+        // movement looks like; one-frame flips are heavily damped instead.
+        const smooth = +smoothRange.value / 100;       // 0..0.9
+        const slow = 1 - smooth;                        // small, steady changes
+        const confirmed = Math.min(1, slow * 2.5);      // big change seen two frames running
+        const unconfirmed = slow * 0.3;                 // big change that may be a flicker
+
+        for (let i = 0; i < n; i++) {
+          const c = data[i];
+          const prev = smoothed[i];
+          const d = c - prev;
+          let k = slow;
+          if (d > 0.25 || d < -0.25) {
+            const agrees = Math.abs(c - lastRaw[i]) < 0.25;
+            k = agrees ? confirmed : unconfirmed;
+          }
+          smoothed[i] = prev + d * k;
+          lastRaw[i] = c;
+        }
+
+        // Spatial smoothing: average each pixel with its neighbours, which removes
+        // speckle and makes the outline follow your shape rather than noise.
+        boxBlur(smoothed, spatialOut, spatialTmp, w, h, 2);
+
+        // Tightness: shift the person/background cutoff and sharpen it, so the soft
+        // fringe of "maybe person" pixels around you gets treated as background.
+        const t = 0.3 + (+tightRange.value / 100) * 0.55;   // cutoff 0.30..0.85
+        const lo = t - 0.12, hi = t + 0.12, span = hi - lo;
+
+        const px = maskImageData.data;
+        for (let i = 0, j = 3; i < n; i++, j += 4) {
+          let a = (spatialOut[i] - lo) / span;
+          a = a < 0 ? 0 : a > 1 ? 1 : a;
+          px[j] = a * a * (3 - 2 * a) * 255;           // smoothstep
+        }
+        maskCtx.putImageData(maskImageData, 0, 0);
+        haveMask = true;
+      });
+    }
+
+    // ---------- Rendering ----------
+    function drawCover(img, w, h) {
+      const scale = Math.max(w / img.width, h / img.height);
+      const dw = img.width * scale, dh = img.height * scale;
+      ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    }
+
+    // Background-only blur: cut you out of the frame first, then blur what's left, so
+    // your colours don't bleed into the area around you.
+    const cutCanvas = document.createElement('canvas');
+    const cutCtx = cutCanvas.getContext('2d');
+    const blurCanvas = document.createElement('canvas');
+    const blurCtx = blurCanvas.getContext('2d');
+
+    function blurredBackground(w, h, mirror, edge) {
+      for (const c of [cutCanvas, blurCanvas]) {
+        if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+      }
+      cutCtx.setTransform(1, 0, 0, 1, 0, 0);
+      cutCtx.globalCompositeOperation = 'source-over';
+      cutCtx.clearRect(0, 0, w, h);
+      if (mirror) cutCtx.setTransform(-1, 0, 0, 1, w, 0);
+      cutCtx.drawImage(video, 0, 0, w, h);
+      // Remove you with a slightly widened mask so no edge pixels of you remain.
+      cutCtx.globalCompositeOperation = 'destination-out';
+      cutCtx.filter = `blur(${edge + 6}px)`;
+      cutCtx.drawImage(maskCanvas, 0, 0, w, h);
+      cutCtx.drawImage(maskCanvas, 0, 0, w, h);
+      cutCtx.filter = 'none';
+      cutCtx.globalCompositeOperation = 'source-over';
+
+      const b = +blurRange.value;
+      blurCtx.setTransform(1, 0, 0, 1, 0, 0);
+      blurCtx.clearRect(0, 0, w, h);
+      blurCtx.filter = `blur(${b}px)`;
+      blurCtx.drawImage(cutCanvas, -b * 2, -b * 2, w + b * 4, h + b * 4); // overscan avoids dark borders
+      blurCtx.filter = 'none';
+      return blurCanvas;
+    }
+
+    function render() {
+      const w = video.videoWidth, h = video.videoHeight;
+      if (!w || !h) return;
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+
+      const mode = getMode();
+      const mirror = mirrorChk.checked;
+      const camTransform = () => mirror ? ctx.setTransform(-1, 0, 0, 1, w, 0) : ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.filter = 'none';
+      ctx.clearRect(0, 0, w, h);
+
+      if (mode === 'none' || !segmenter || !haveMask) {
+        camTransform();
+        ctx.drawImage(video, 0, 0, w, h);
+        ctx.restore();
+        return;
+      }
+
+      // 1. You: camera frame, cut out by the person mask.
+      camTransform();
+      ctx.drawImage(video, 0, 0, w, h);
+      ctx.globalCompositeOperation = 'destination-in';
+      const edge = +edgeRange.value;
+      if (edge) ctx.filter = `blur(${edge}px)`;
+      ctx.drawImage(maskCanvas, 0, 0, w, h);
+      ctx.filter = 'none';
+
+      // 2. Background, painted behind you.
+      ctx.globalCompositeOperation = 'destination-over';
+      if (mode === 'blur') {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        const layer = blurredBackground(w, h, mirror, edge);
+        // The cut-out layer is semi-transparent near where you were; stacking it a few
+        // times fills that in with background colour instead of a smear of you.
+        for (let k = 0; k < 4; k++) ctx.drawImage(layer, 0, 0);
+        // Anything still uncovered (right at your soft edge) gets the plain blurred frame.
+        const b = +blurRange.value;
+        camTransform();
+        ctx.filter = `blur(${b}px)`;
+        ctx.drawImage(video, -b * 2, -b * 2, w + b * 4, h + b * 4);
+        ctx.filter = 'none';
+      } else if (bgImage) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0); // never mirror the background image
+        drawCover(bgImage, w, h);
+      } else {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = '#1f2937';
+        ctx.fillRect(0, 0, w, h);
+      }
+      ctx.restore();
+    }
+
+    // Drive the loop from whichever window is visible: a hidden tab stops firing
+    // requestAnimationFrame, but the Document PiP window keeps going.
+    function startLoop() {
+      const token = ++loopToken;
+      const host = docPipWindow || window;
+      const tick = () => {
+        if (token !== loopToken || !stream) return;
+        // Only do work when the camera has delivered a new frame (cameras are ~30fps,
+        // screens 60+), so we never process the same frame twice.
+        if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+          lastVideoTime = video.currentTime;
+          const needSeg = getMode() !== 'none' && segmenter;
+          if (needSeg || capture) grabSegFrame();
+          if (capture) accumulateCapture();
+          if (needSeg) {
+            try { segment(performance.now()); } catch (err) { console.error(err); }
+          }
+          render();
+        }
+        host.requestAnimationFrame(tick);
+      };
+      host.requestAnimationFrame(tick);
+    }
+
+    // ---------- Camera ----------
+    async function listCameras() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      const current = stream?.getVideoTracks()[0]?.getSettings().deviceId;
+      cameraSelect.innerHTML = '';
+      cams.forEach((cam, i) => {
+        const opt = document.createElement('option');
+        opt.value = cam.deviceId;
+        opt.textContent = cam.label || `Camera ${i + 1}`;
+        if (cam.deviceId === current) opt.selected = true;
+        cameraSelect.appendChild(opt);
+      });
+      cameraSelect.disabled = cams.length < 2;
+    }
+
+    async function startCamera(deviceId) {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      const size = { width: { ideal: 1280 }, height: { ideal: 720 } };
+      const tryGet = id => navigator.mediaDevices.getUserMedia({
+        video: id ? { ...size, deviceId: { exact: id } } : size,
+        audio: false,
+      });
+      try {
+        try {
+          stream = await tryGet(deviceId);
+        } catch (err) {
+          if (!deviceId) throw err;
+          stream = await tryGet(); // remembered camera is gone; use the default
+        }
+        video.srcObject = stream;
+        await video.play();
+        lastVideoTime = -1;
+        haveMask = false;
+        placeholder.hidden = !docPipWindow;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        pipBtn.disabled = !(hasDocPip || hasVideoPip);
+        settings.set('running', true);
+        settings.set('camera', stream.getVideoTracks()[0]?.getSettings().deviceId || null);
+        await listCameras();
+        startLoop();
+        if (!segmenterLoading || segmenter) {
+          setStatus(hasDocPip || hasVideoPip
+            ? 'Camera on. Click "Pop out (PiP)" to float it.'
+            : 'Camera on, but this browser does not support picture-in-picture.');
+        }
+      } catch (err) {
+        stream = null;
+        settings.set('running', false);
+        setStatus(`Could not start camera: ${err.name} — ${err.message}`);
+      }
+    }
+
+    function stopCamera() {
+      closePip();
+      if (capture) { const done = capture.resolve; capture = null; done(false); }
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      loopToken++;
+      video.srcObject = null;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      placeholder.textContent = 'Camera is off. Click Start camera.';
+      placeholder.hidden = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      pipBtn.disabled = true;
+      settings.set('running', false);
+      setStatus('Camera stopped.');
+    }
+
+    // ---------- Picture-in-picture ----------
+    // Document PiP (Chrome/Edge 116+): moves the canvas (and its source video) into an
+    // always-on-top window, so effects and mirroring keep running at full speed.
+    async function openDocPip() {
+      const width = 400;
+      const height = Math.round(width * ((canvas.height / canvas.width) || 9 / 16));
+      docPipWindow = await documentPictureInPicture.requestWindow({ width, height });
+      const doc = docPipWindow.document;
+      const style = doc.createElement('style');
+      style.textContent = `
+        html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+        canvas { width: 100%; height: 100%; object-fit: cover; display: block; }
+        video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+      `;
+      doc.head.appendChild(style);
+      doc.title = 'Webcam';
+      doc.body.append(canvas, video);
+      video.play();
+
+      placeholder.textContent = 'Camera is in the picture-in-picture window.';
+      placeholder.hidden = false;
+      pipBtn.textContent = 'Bring back';
+      startLoop();
+
+      docPipWindow.addEventListener('pagehide', () => {
+        stage.prepend(canvas, video);
+        docPipWindow = null;
+        video.play().catch(() => {});
+        pipBtn.textContent = 'Pop out (PiP)';
+        placeholder.textContent = 'Camera is off. Click Start camera.';
+        placeholder.hidden = !!stream;
+        startLoop();
+      });
+    }
+
+    // Classic video PiP (Safari, older Chromium): stream the canvas into a video element.
+    // Effects keep working, but some browsers slow the page down while its tab is hidden.
+    async function openVideoPip() {
+      if (!pipVideo) {
+        pipVideo = document.createElement('video');
+        pipVideo.muted = true;
+        pipVideo.playsInline = true;
+        pipVideo.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
+        stage.appendChild(pipVideo);
+        pipVideo.addEventListener('enterpictureinpicture', () => { pipBtn.textContent = 'Bring back'; });
+        pipVideo.addEventListener('leavepictureinpicture', () => { pipBtn.textContent = 'Pop out (PiP)'; });
+      }
+      pipVideo.srcObject = canvas.captureStream(30);
+      await pipVideo.play();
+      await pipVideo.requestPictureInPicture();
+    }
+
+    function closePip() {
+      if (docPipWindow) docPipWindow.close();
+      if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+    }
+
+    pipBtn.addEventListener('click', async () => {
+      try {
+        if (docPipWindow || document.pictureInPictureElement) closePip();
+        else if (hasDocPip) await openDocPip();
+        else await openVideoPip();
+      } catch (err) {
+        setStatus(`Picture-in-picture failed: ${err.message}`);
+      }
+    });
+
+    startBtn.addEventListener('click', () => startCamera(settings.get('camera', null)));
+    stopBtn.addEventListener('click', stopCamera);
+    cameraSelect.addEventListener('change', () => startCamera(cameraSelect.value));
+    navigator.mediaDevices?.addEventListener?.('devicechange', () => stream && listCameras());
+
+    // ---------- Defaults & reset ----------
+    const DEFAULTS = {
+      mirror: true,
+      blur: 16,
+      edge: 2,
+      tight: 60,
+      smooth: 60,
+      model: 'accurate',
+      plateStrength: 60,
+      plateSens: 50,
+    };
+
+    // Set every tuning control from get(key). Returns true if the model changed.
+    function applyTuning(get) {
+      const prevModel = modelSelect.value;
+      mirrorChk.checked = !!get('mirror');
+      blurRange.value = get('blur');
+      edgeRange.value = get('edge');
+      tightRange.value = get('tight');
+      smoothRange.value = get('smooth');
+      modelSelect.value = get('model') === 'fast' ? 'fast' : 'accurate';
+      plateStrength.value = get('plateStrength');
+      plateSens.value = get('plateSens');
+      return modelSelect.value !== prevModel;
+    }
+
+    $('resetBtn').addEventListener('click', () => {
+      const modelChanged = applyTuning(key => DEFAULTS[key]);
+      for (const [key, value] of Object.entries(DEFAULTS)) settings.set(key, value);
+      // Swap in the default model (the change handler reloads it).
+      if (modelChanged) modelSelect.dispatchEvent(new Event('change'));
+      setStatus('Settings reset to defaults. Your background mode, image and captured background were kept.');
+    });
+
+    // ---------- Restore state from last visit ----------
+    (async () => {
+      applyTuning(key => settings.get(key, DEFAULTS[key]));
+
+      try {
+        const saved = await dbGet('plate');
+        if (saved?.data instanceof Float32Array && saved.data.length === saved.w * saved.h * 3) setPlate(saved);
+      } catch (err) {
+        console.warn('Could not restore captured background', err);
+      }
+
+      try {
+        const blob = await dbGet('background');
+        if (blob) await applyBackgroundBlob(blob);
+      } catch (err) {
+        console.warn('Could not restore background image', err);
+      }
+
+      const mode = settings.get('mode', 'none');
+      setMode(['none', 'blur', 'image'].includes(mode) ? mode : 'none');
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        startBtn.disabled = true;
+        setStatus('Camera access needs a secure context: open this page via http://localhost or https://.');
+        return;
+      }
+      if (!hasDocPip && !hasVideoPip) {
+        setStatus('Note: this browser has no picture-in-picture API (in Firefox, use the PiP toggle on the video).');
+      }
+      // If the camera was on before the refresh, turn it back on.
+      if (settings.get('running', false)) startCamera(settings.get('camera', null));
+    })();
+  </script>
+</body>
+</html>
